@@ -53,11 +53,15 @@ devicetree_iterate_node(const void **data, const void *data_end,
 		if (prop->name[sizeof(prop->name) - 1] != 0) {
 			return false;
 		}
-		// Properties are padded to a multiple of 4 bytes.
-		size_t padded_size = (prop->size + 0x3) & ~0x3;
+		// Properties are padded to a multiple of 4 bytes. There also appears to be a flag
+		// field (bit 31) which is set if iBoot should replace the value of the field with
+		// a syscfg property or other value. (We do not see this flag for device trees
+		// dumped from kernel memory.)
+		uint32_t prop_size = prop->size & ~0x80000000;
+		size_t padded_size = (prop_size + 0x3) & ~0x3;
 		p += padded_size;
 		if (p > end) {
-			if (p - padded_size + prop->size == end) {
+			if (p - padded_size + prop_size == end) {
 				// We're at the very end, ease up on the lack of padding.
 				p = end;
 			} else {
@@ -66,7 +70,7 @@ devicetree_iterate_node(const void **data, const void *data_end,
 		}
 		// If we have a property callback, invoke it.
 		if (property_callback != NULL) {
-			property_callback(depth + 1, prop->name, prop->data, prop->size, stop);
+			property_callback(depth + 1, prop->name, prop->data, prop_size, stop);
 			if (*stop) {
 				return true;
 			}
