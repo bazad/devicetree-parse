@@ -246,12 +246,6 @@ print_property_dec_int(struct strbuf *sb, const void *data, size_t size) {
 }
 
 static bool
-print_property_string(struct strbuf *sb, const void *data, size_t size) {
-	assert(size > 0);
-	return strbuf_printf(sb, "\"%s\"", data);
-}
-
-static bool
 print_property_hex_string(struct strbuf *sb, const void *data, size_t size) {
 	const char *p = data;
 	const char *end = p + size;
@@ -272,6 +266,13 @@ print_property_hex_string(struct strbuf *sb, const void *data, size_t size) {
 		ok = strbuf_printf(sb, "\"");
 	}
 	return ok;
+}
+
+static bool
+print_property_string(struct strbuf *sb, const void *data, size_t size) {
+	assert(size > 0);
+	size_t len = strnlen((const char *)data, size);
+	return print_property_hex_string(sb, data, len);
 }
 
 static bool
