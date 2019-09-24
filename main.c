@@ -39,10 +39,16 @@ all_printable_ascii(const void *data, size_t size) {
 }
 
 struct measure_string_info {
+	// The number of printable characters.
 	size_t printable;
+	// The index of the first null, or the size of the string.
 	size_t first_null;
+	// The number of printable characters after the first null.
 	size_t after_null;
+	// The number of null bytes.
 	size_t null_count;
+	// The number of characters in a printable run of length 8 or more.
+	size_t printable_run_count;
 };
 
 static void
@@ -51,7 +57,9 @@ measure_string(const void *data, size_t size, struct measure_string_info *string
 	string_info->first_null = size;
 	string_info->after_null = 0;
 	string_info->null_count = 0;
+	string_info->printable_run_count = 0;
 	const uint8_t *bytes = (const uint8_t *)data;
+	size_t current_printable_run = 0;
 	for (size_t i = 0; i < size; i++) {
 		uint8_t byte = bytes[i];
 		if (byte == 0) {
@@ -59,6 +67,12 @@ measure_string(const void *data, size_t size, struct measure_string_info *string
 		}
 		if (isprint(byte)) {
 			string_info->printable++;
+			current_printable_run++;
+		} else {
+			if (current_printable_run >= 8) {
+				string_info->printable_run_count += current_printable_run;
+			}
+			current_printable_run = 0;
 		}
 		if (string_info->first_null != size && byte != 0) {
 			string_info->after_null++;
@@ -66,6 +80,9 @@ measure_string(const void *data, size_t size, struct measure_string_info *string
 		if (byte == 0 && string_info->first_null == size) {
 			string_info->first_null = i;
 		}
+	}
+	if (current_printable_run >= 8) {
+		string_info->printable_run_count += current_printable_run;
 	}
 }
 
@@ -123,9 +140,6 @@ compute_display_type(const char *name, const void *data, size_t size) {
 	if (string.printable >= 0.75 * size) {
 		return DISP_HEX_STRING;
 	}
-	if (size == 4 || size == 8) {
-		return DISP_HEX_INT;
-	}
 	if (size > 0 && size % 16 == 0) {
 		bool is_reg = strstr(name, "reg") != NULL;
 		if (is_reg) {
@@ -135,6 +149,17 @@ compute_display_type(const char *name, const void *data, size_t size) {
 		if (valid) {
 			return DISP_PHYSADDR_LEN;
 		}
+	}
+	if (string.printable >= 2 && size >= 24
+			&& string.printable + string.null_count >= 0.90 * size) {
+		return DISP_HEX_STRING;
+	}
+	if (string.printable_run_count > 0 && size >= 24
+			&& string.printable_run_count + string.null_count >= 0.6 * size) {
+		return DISP_HEX_STRING;
+	}
+	if (size == 4 || size == 8) {
+		return DISP_HEX_INT;
 	}
 	return DISP_HEX_DUMP;
 }
