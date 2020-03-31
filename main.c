@@ -11,9 +11,13 @@
 
 #include "devicetree-parse.h"
 
-// ---- DeviceTree printing -----------------------------------------------------------------------
 
-static bool verbose;
+// ---- Options -----------------------------------------------------------------------------------
+
+static bool print_verbose;
+static bool print_tree;
+
+// ---- DeviceTree printing -----------------------------------------------------------------------
 
 static uint64_t
 read_uint(const void *data, size_t size) {
@@ -277,12 +281,13 @@ print_property_hex_string(struct strbuf *sb, const void *data, size_t size) {
 	bool ok = strbuf_printf(sb, "\"");
 	for (; ok && p < end; p++) {
 		uint8_t c = *p;
-		if (isprint(c)) {
-			ok = strbuf_printf(sb, "%c", c);
-		} else if (c == '"') {
-			ok = strbuf_printf(sb, "\\\"");
-		} else if (c == 0) {
+		if (c == '\\' || c == '"') {
+			ok = strbuf_printf(sb, "\\");
+		}
+		if (c == 0) {
 			ok = strbuf_printf(sb, "\\0");
+		} else if (isprint(c)) {
+			ok = strbuf_printf(sb, "%c", c);
 		} else {
 			ok = strbuf_printf(sb, "\\x%02x", (unsigned)c);
 		}
@@ -341,8 +346,17 @@ print_property(struct strbuf *sb, const char *name, const void *value, size_t si
 
 static void
 print_indent(unsigned depth) {
-	for (size_t i = 0; i < 4 * depth; i++) {
-		printf(" ");
+	if (print_tree) {
+		if (depth > 0) {
+			for (unsigned i = 0; i < depth - 1; i++) {
+				printf("|   ");
+			}
+			printf("|-- ");
+		}
+	} else {
+		for (unsigned i = 0; i < 4 * depth; i++) {
+			printf(" ");
+		}
 	}
 }
 
@@ -350,16 +364,16 @@ static bool
 devicetree_print(const void *data, size_t size) {
 	__block const char *node_name;
 	__block struct strbuf sb;
-	strbuf_alloc(&sb, verbose ? -1 : 64);
+	strbuf_alloc(&sb, print_verbose ? -1 : 64);
 	devicetree_iterate_property_callback_t find_node_name_cb =
-			^void(unsigned depth, const char *name,
+			^(unsigned depth, const char *name,
 					const void *value, size_t size, bool *stop) {
 		if (strcmp(name, "name") == 0) {
 			node_name = (const char *)value;
 		}
 	};
 	devicetree_iterate_node_callback_t node_cb =
-			^void(unsigned depth, const void *node, size_t size,
+			^(unsigned depth, const void *node, size_t size,
 					unsigned n_properties, unsigned n_children, bool *stop) {
 		bool ok = devicetree_node_scan_properties(node, size, find_node_name_cb);
 		if (!ok) {
@@ -369,7 +383,7 @@ devicetree_print(const void *data, size_t size) {
 		printf("%s:\n", node_name);
 	};
 	devicetree_iterate_property_callback_t property_cb =
-			^void(unsigned depth, const char *name,
+			^(unsigned depth, const char *name,
 					const void *value, size_t size, bool *stop) {
 		print_indent(depth);
 		printf("%s (%zu)%s", name, size, (size > 0 ? ": " : ""));
@@ -419,25 +433,34 @@ fail_0:
 
 int
 main(int argc, const char *argv[]) {
-	if (argc != 2 && argc != 3) {
-usage:
-		printf("usage: %s [-v] <devicetree-file>\n", getprogname());
+	// Parse options.
+	int argidx = 1;
+	while (argidx < argc) {
+		const char *arg = argv[argidx];
+		argidx++;
+		if (strcmp(arg, "-v") == 0) {
+			print_verbose = true;
+		} else if (strcmp(arg, "-t") == 0) {
+			print_tree = true;
+		} else {
+			argidx--;
+			break;
+		}
+	}
+	// Parse arguments.
+	if (argidx != argc - 1) {
+		printf("usage: %s [-v] [-t] <devicetree-file>\n", getprogname());
 		return 1;
 	}
-	const char *file = argv[1];
-	if (argc == 3) {
-		if (strcmp(argv[1], "-v") != 0) {
-			goto usage;
-		}
-		verbose = true;
-		file = argv[2];
-	}
+	const char *file = argv[argidx];
+	// Read the input file.
 	void *data;
 	size_t size;
 	bool ok = mmap_file(file, &data, &size);
 	if (!ok) {
 		return 2;
 	}
+	// Print the device tree.
 	ok = devicetree_print(data, size);
 	return (!ok ? 3 : 0);
 }
