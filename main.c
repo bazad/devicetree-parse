@@ -17,6 +17,21 @@
 static bool print_verbose;
 static bool print_tree;
 
+// ---- DeviceTree structures ---------------------------------------------------------------------
+
+struct phys_range {
+	uint64_t phys;
+	uint64_t size;
+};
+
+struct segment_range {
+	uint64_t phys;
+	uint64_t virt;
+	uint64_t remap;
+	uint32_t size;
+	uint32_t flags;
+};
+
 // ---- DeviceTree printing -----------------------------------------------------------------------
 
 static uint64_t
@@ -91,17 +106,17 @@ measure_string(const void *data, size_t size, struct measure_string_info *string
 }
 
 static int
-check_physaddr_length_pairs(const uint64_t *words, size_t count) {
-	for (size_t i = 0; i < count; i += 2) {
-		uint64_t physaddr = words[i];
-		uint64_t length = words[i + 1];
-		if (physaddr > 0x980000000) {
+check_phys_ranges(const void *data, size_t size) {
+	const struct phys_range *phys_range = data;
+	size_t count = size / sizeof(*phys_range);
+	for (size_t i = 0; i < count; i++) {
+		if (phys_range[i].phys > 0x980000000) {
 			return false;
 		}
-		if ((physaddr & 0x3fff) != 0) {
+		if ((phys_range[i].phys & 0xfff) != 0) {
 			return false;
 		}
-		if (length > 0x80000000) {
+		if (phys_range[i].size > 0x80000000) {
 			return false;
 		}
 	}
@@ -115,7 +130,8 @@ enum display_type {
 	DISP_STRING,
 	DISP_HEX_STRING,
 	DISP_FUNCTION_PROP,
-	DISP_PHYSADDR_LEN,
+	DISP_PHYS_RANGES,
+	DISP_SEGMENT_RANGES,
 };
 
 static enum display_type
@@ -126,6 +142,12 @@ compute_display_type(const char *name, const void *data, size_t size) {
 	}
 	if (name[0] == '#') {
 		return DISP_DEC_INT;
+	}
+	if (size > 0 && size % sizeof(struct segment_range) == 0) {
+		bool is_segment_ranges = strcmp(name, "segment-ranges") == 0;
+		if (is_segment_ranges) {
+			return DISP_SEGMENT_RANGES;
+		}
 	}
 	struct measure_string_info string;
 	measure_string(data, size, &string);
@@ -144,14 +166,14 @@ compute_display_type(const char *name, const void *data, size_t size) {
 	if (string.printable >= 0.75 * size) {
 		return DISP_HEX_STRING;
 	}
-	if (size > 0 && size % 16 == 0) {
+	if (size > 0 && size % sizeof(struct phys_range) == 0) {
 		bool is_reg = strstr(name, "reg") != NULL;
 		if (is_reg) {
-			return DISP_PHYSADDR_LEN;
+			return DISP_PHYS_RANGES;
 		}
-		bool valid = check_physaddr_length_pairs((const uint64_t *)data, size / 8);
+		bool valid = check_phys_ranges(data, size);
 		if (valid) {
-			return DISP_PHYSADDR_LEN;
+			return DISP_PHYS_RANGES;
 		}
 	}
 	if (string.printable >= 2 && size >= 24
@@ -311,13 +333,33 @@ print_property_function(struct strbuf *sb, const void *data, size_t size) {
 }
 
 static bool
-print_property_physaddr_len(struct strbuf *sb, const void *data, size_t size) {
-	assert(size % 16 == 0 && size > 0);
-	const uint64_t *p = data;
+print_property_phys_ranges(struct strbuf *sb, const void *data, size_t size) {
+	assert(size % sizeof(struct phys_range) == 0 && size > 0);
+	const struct phys_range *phys_range = data;
+	size_t count = size / sizeof(*phys_range);
 	bool ok = true;
-	for (size_t i = 0; ok && i < size / 16; i++) {
-		bool end = i == size / 16 - 1;
-		ok = strbuf_printf(sb, "0x%016llx,%llx%s", p[2 * i], p[2 * i + 1],
+	for (int i = 0; ok && i < count; i++) {
+		bool end = (i == count - 1);
+		ok = strbuf_printf(sb, "0x%llx,%llx%s",
+				phys_range[i].phys, phys_range[i].size,
+				(end ? "" : "; "));
+	}
+	return ok;
+}
+
+static bool
+print_property_segment_ranges(struct strbuf *sb, const void *data, size_t size) {
+	assert(size > 0 && size % sizeof(struct segment_range) == 0);
+	const struct segment_range *segment_range = data;
+	size_t count = size / sizeof(*segment_range);
+	bool ok = true;
+	for (int i = 0; ok && i < count; i++) {
+		bool end = (i == count - 1);
+		ok = strbuf_printf(sb, "{ phys=0x%llx, virt=0x%llx, remap=0x%llx, "
+				"size=0x%x, flags=0x%x }%s",
+				segment_range[i].phys, segment_range[i].virt,
+				segment_range[i].remap, segment_range[i].size,
+				segment_range[i].flags,
 				(end ? "" : "; "));
 	}
 	return ok;
@@ -339,8 +381,10 @@ print_property(struct strbuf *sb, const char *name, const void *value, size_t si
 			return print_property_hex_string(sb, value, size);
 		case DISP_FUNCTION_PROP:
 			return print_property_function(sb, value, size);
-		case DISP_PHYSADDR_LEN:
-			return print_property_physaddr_len(sb, value, size);
+		case DISP_PHYS_RANGES:
+			return print_property_phys_ranges(sb, value, size);
+		case DISP_SEGMENT_RANGES:
+			return print_property_segment_ranges(sb, value, size);
 	}
 }
 
